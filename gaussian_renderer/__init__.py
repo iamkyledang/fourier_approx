@@ -30,8 +30,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         # idx1, idx2, idx3 = 3, 4, 5        
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
     screenspace_points = torch.zeros_like(pc.get_xyz[:, 0, :], dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
+    screenspace_points_densify = torch.zeros_like(pc.get_xyz[:, 0, :], dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
         screenspace_points.retain_grad()
+        screenspace_points_densify.retain_grad()
     except:
         pass
 
@@ -112,9 +114,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         colors_precomp = override_color
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    rendered_image, radii = rasterizer(
+    rendered_image, radii, depth = rasterizer(
         means3D = means3D,
         means2D = means2D,
+        means2D_densify = screenspace_points_densify,
         shs = shs,
         colors_precomp = colors_precomp,
         opacities = opacity,
@@ -127,8 +130,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # They will be excluded from value updates used in the splitting criteria.
     return {"render": rendered_image,
             "viewspace_points": screenspace_points,
+            "viewspace_points_densify": screenspace_points_densify,
             "visibility_filter" : radii > 0,
-            "radii": radii}
+            "radii": radii,
+            "depth": depth}
 
 
 
@@ -142,8 +147,10 @@ def render_flow(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Ten
 
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
     screenspace_points = torch.zeros_like(pc.get_xyz[:, 0, :], dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
+    screenspace_points_densify = torch.zeros_like(pc.get_xyz[:, 0, :], dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
         screenspace_points.retain_grad()
+        screenspace_points_densify.retain_grad()
     except:
         pass
 
@@ -207,9 +214,6 @@ def render_flow(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Ten
     shs = None
     colors_precomp = None
     shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
-    basis = 2**torch.arange(0, L, device='cuda').repeat_interleave(2)*math.pi*time
-    basis[::2] = torch.sin(basis[::2])
-    basis[1::2] = torch.cos(basis[1::2])
     t1 = (pc.get_xyz[:, 1:2*L+1, :]*basis.unsqueeze(-1)).sum(1)
     time2 = time + time_delta    
     basis2 = 2**torch.arange(0, L, device='cuda').repeat_interleave(2)*math.pi*time2
@@ -236,9 +240,10 @@ def render_flow(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Ten
 
     colors_precomp = flow
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    rendered_image, radii = rasterizer(
+    rendered_image, radii, depth = rasterizer(
         means3D = means3D.detach(),
         means2D = means2D.detach(),
+        means2D_densify = screenspace_points_densify.detach(),
         shs = shs,
         colors_precomp = colors_precomp,
         opacities = opacity.detach(),

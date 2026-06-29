@@ -13,6 +13,14 @@ import torch
 from torch.utils.data import DataLoader
 from scene import Scene
 import os
+os.environ.setdefault(
+    "PYTORCH_CUDA_ALLOC_CONF",
+    # max_split_size_mb:512 matches the training config.  128 is too small:
+    # blocks >128 MB cannot be reused after a split, causing fragmentation.
+    "garbage_collection_threshold:0.6,max_split_size_mb:512"
+)
+import json
+import time
 from tqdm import tqdm
 from os import makedirs
 from gaussian_renderer import render
@@ -38,6 +46,38 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+        del rendering, gt
+        if idx % 50 == 0:
+            torch.cuda.empty_cache()
+
+    if name == "test":
+        t_list = []
+        _views = list(views) if not isinstance(views, list) else views
+        for view in tqdm(_views, desc="FPS measurement"):
+            if type(view) is list:
+                view = view[0]
+            torch.cuda.synchronize()
+            t_start = time.time()
+            render(view, gaussians, pipeline, background)
+            torch.cuda.synchronize()
+            t_list.append(time.time() - t_start)
+        import numpy as np
+        t = np.array(t_list[5:])
+        if len(t) > 0:
+            xyz = gaussians.get_xyz
+            fps = 1.0 / t.mean()
+            print(f'Test FPS: \033[1;35m{fps:.5f}\033[0m, Num. of GS: {xyz.shape[0]}')
+            _results_path = os.path.join(model_path, "results.json")
+            _existing = {}
+            if os.path.exists(_results_path):
+                with open(_results_path) as _f:
+                    _existing = json.load(_f)
+            _method_key = "ours_{}".format(iteration)
+            if not isinstance(_existing.get(_method_key), dict):
+                _existing[_method_key] = {}
+            _existing[_method_key].update({"fps": float(fps), "num_gaussians": int(xyz.shape[0])})
+            with open(_results_path, "w") as _f:
+                json.dump(_existing, _f, indent=True)
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool):
     with torch.no_grad():
@@ -49,7 +89,8 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 
         if not skip_train:
             if scene.use_loader:
-                views = DataLoader(scene.getTrainCameras(), batch_size=1, shuffle=False, num_workers=16, collate_fn=list)
+                _render_workers = min(4, os.cpu_count() or 1)
+                views = DataLoader(scene.getTrainCameras(), batch_size=1, shuffle=False, num_workers=_render_workers, collate_fn=list)
             else:
                 views = scene.getTrainCameras()
 

@@ -15,7 +15,7 @@ from torch.autograd import Variable
 from math import exp
 from torchmetrics import MultiScaleStructuralSimilarityIndexMeasure
 
-ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(data_range=1.0).to('cuda')
+ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(data_range=1.0, betas=(0.0448, 0.2856, 0.3001)).to('cuda')
 
 def l1_loss(network_output, gt):
     return torch.abs((network_output - gt)).mean()
